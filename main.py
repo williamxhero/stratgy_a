@@ -24,14 +24,25 @@ vbt.settings.array_wrapper['freq'] = 'D'  # 设置默认频率为日频
 
 class VolumePrice_Strategy:
     """量价策略类"""
-    
-    def __init__(self, initial_capital=1000000):
-        """
-        初始化策略
+
+    def __init__(self, initial_capital=1000000, position_size=0.05,
+                 max_holding_days=3, trail_percent=0.03,
+                 stop_loss_pct=0.02, profit_take_pct=0.05):
+        """初始化策略
+
         :param initial_capital: 初始资金，默认100万
+        :param position_size: 单只股票仓位
+        :param max_holding_days: 最大持仓天数
+        :param trail_percent: 移动止损百分比
+        :param stop_loss_pct: 固定止损百分比
+        :param profit_take_pct: 止盈百分比
         """
         self.initial_capital = initial_capital
-        self.position_size = 0.05  # 单只股票仓位5%
+        self.position_size = position_size
+        self.max_holding_days = max_holding_days
+        self.trail_percent = trail_percent
+        self.stop_loss_pct = stop_loss_pct
+        self.profit_take_pct = profit_take_pct
         
     def get_hs500_stocks(self):
         """获取沪深500成分股"""
@@ -192,30 +203,35 @@ class VolumePrice_Strategy:
         
         return near_ma10  # 移除阴线要求
     
-    def check_sell_condition(self, data, buy_date, current_date):
-        """
-        检查卖出条件
-        :param data: 股票数据
-        :param buy_date: 买入日期
-        :param current_date: 当前日期
-        :return: 是否应该卖出
-        """
+    def check_sell_condition(self, data, buy_date, current_date, buy_price,
+                            highest_price):
+        """检查卖出条件"""
         current_data = data.loc[current_date]
-        
-        # 持仓时间条件：持仓满3个交易日强制平仓
+
         holding_days = len(data.loc[buy_date:current_date]) - 1
-        if holding_days >= 3:
-            return True, "持仓满3天"
-        
-        # 次日开盘条件：开盘价低于10日均线
-        if holding_days == 1:  # 买入后第一个交易日
-            if current_data['open'] < current_data['ma10']:
-                return True, "开盘价低于10日均线"
-        
-        # 收盘条件：当日涨幅超过2%
+        if holding_days >= self.max_holding_days:
+            return True, "持仓超期"
+
+        # 次日开盘价低于10日均线
+        if holding_days == 1 and current_data['open'] < current_data['ma10']:
+            return True, "开盘价低于10日均线"
+
+        # 移动止损
+        if highest_price > 0 and current_data['close'] <= highest_price * (1 - self.trail_percent):
+            return True, "触发移动止损"
+
+        # 固定止损
+        if buy_price > 0 and current_data['close'] <= buy_price * (1 - self.stop_loss_pct):
+            return True, "触发止损"
+
+        # 止盈
+        if buy_price > 0 and current_data['close'] >= buy_price * (1 + self.profit_take_pct):
+            return True, "达到止盈目标"
+
+        # 当日涨幅超过2%
         if current_data['change_pct'] > 2:
             return True, "当日涨幅超过2%"
-        
+
         return False, ""
     
     def generate_signals(self, stock_code, data):
@@ -230,9 +246,11 @@ class VolumePrice_Strategy:
         signals['sell'] = False
         signals['position'] = 0
         signals['reason'] = ''
-        
+
         position = 0
         buy_date = None
+        buy_price = 0.0
+        highest_price = 0.0
         
         for i, (date, row) in enumerate(data.iterrows()):
             if i < 60:  # 降低历史数据要求，只需要60天
@@ -246,21 +264,27 @@ class VolumePrice_Strategy:
                 volume_ok = self.check_volume_condition(current_data)
                 trend_ok = self.check_trend_condition(current_data)
                 buy_ok = self.check_buy_condition(current_data)
-                
+
                 if volume_ok and trend_ok and buy_ok:
                     signals.loc[date, 'buy'] = True
                     signals.loc[date, 'reason'] = '满足买入条件'
                     position = 1
                     buy_date = date
+                    buy_price = row['close']
+                    highest_price = row['close']
             
             # 如果有持仓，检查卖出条件
             elif position == 1:
-                should_sell, reason = self.check_sell_condition(current_data, buy_date, date)
+                highest_price = max(highest_price, row['close'])
+                should_sell, reason = self.check_sell_condition(
+                    current_data, buy_date, date, buy_price, highest_price)
                 if should_sell:
                     signals.loc[date, 'sell'] = True
                     signals.loc[date, 'reason'] = reason
                     position = 0
                     buy_date = None
+                    buy_price = 0.0
+                    highest_price = 0.0
             
             signals.loc[date, 'position'] = position
         
