@@ -26,9 +26,9 @@ class VolumePrice_Strategy:
     """量价策略类"""
 
     def __init__(self, initial_capital=1000000, position_size=0.05,
-                 max_holding_days=3, trail_percent=0.03,
-                 stop_loss_pct=0.02, profit_take_pct=0.05):
-        """初始化策略
+                 max_holding_days=3, trail_percent=0.02,
+                 stop_loss_pct=0.03, profit_take_pct=0.03):
+        """初始化策略 
 
         :param initial_capital: 初始资金，默认100万
         :param position_size: 单只股票仓位
@@ -168,20 +168,21 @@ class VolumePrice_Strategy:
     
     def check_trend_condition(self, data):
         """
-        检查趋势条件：简化的趋势判断
+        检查趋势条件：加强的趋势判断
         :param data: 股票数据
         :return: 是否满足趋势条件
         """
         latest = data.iloc[-1]
         
-        # 简化趋势条件：只要5日均线 > 20日均线即可
         ma5 = latest['ma5']
+        ma10 = latest['ma10']
         ma20 = latest['ma20']
+        ma60 = latest['ma60']
         
-        if pd.isna(ma5) or pd.isna(ma20):
+        if pd.isna(ma5) or pd.isna(ma10) or pd.isna(ma20) or pd.isna(ma60):
             return False
             
-        return ma5 > ma20
+        return ma5 > ma10 > ma20 > ma60
     
     def check_buy_condition(self, data):
         """
@@ -191,7 +192,7 @@ class VolumePrice_Strategy:
         """
         latest = data.iloc[-1]
         
-        # 简化买入条件：股价接近10日均线（偏离不超过±5%）
+        # 买入条件：股价接近10日均线（偏离不超过±5%）且为阴线
         close_price = latest['close']
         ma10 = latest['ma10']
         
@@ -201,7 +202,9 @@ class VolumePrice_Strategy:
         deviation = abs(close_price - ma10) / ma10
         near_ma10 = deviation <= 0.05  # 放宽到5%
         
-        return near_ma10  # 移除阴线要求
+        is_yin = close_price < latest['open']
+        
+        return near_ma10 and is_yin
     
     def check_sell_condition(self, data, buy_date, current_date, buy_price,
                             highest_price):
